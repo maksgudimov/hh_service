@@ -1,0 +1,156 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: postgres-core
+    env_file:
+      - .env
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USERNAME}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_HOST: ${DB_HOST}
+      POSTGRES_PORT: ${DB_PORT}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "${DB_PORT}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    networks:
+      - backend-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME} -d ${DB_NAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # RabbitMQ сервис
+  rabbitmq:
+    image: rabbitmq:3.12-management-alpine
+    container_name: rabbitmq-core
+    env_file:
+      - .env
+    environment:
+      RABBITMQ_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-guest}
+      RABBITMQ_VHOST: ${RABBITMQ_VHOST:-/}
+      RABBITMQ_PORT: ${RABBITMQ_PORT}
+    ports:
+      - "${RABBITMQ_PORT:-5672}:5672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    restart: unless-stopped
+    networks:
+      - backend-network
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  manager_crm_app:
+    build:
+      context: ./manager_crm_app
+      dockerfile: Dockerfile
+    container_name: manager-crm-app
+    env_file:
+      - ./manager_crm_app/.env
+    environment:
+      DB_HOST: ${DB_HOST}
+      DB_PORT: ${DB_PORT}
+      DB_NAME: ${DB_NAME}
+      DB_USERNAME: ${DB_USERNAME}
+      DB_PASSWORD: ${DB_PASSWORD}
+
+      RABBITMQ_HOST: ${RABBITMQ_HOST}
+      RABBITMQ_PORT: ${RABBITMQ_PORT}
+      RABBITMQ_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-guest}
+      RABBITMQ_VHOST: ${RABBITMQ_VHOST:-/}
+      RABBITMQ_QUEUE: ${HH_QUEUE:-reactions_queue}
+
+      APP_NAME: manager_crm
+      APP_PORT: 8080
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./manager_crm_app:/manager_crm_app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - backend-network
+    command: uvicorn src.main:app --host 0.0.0.0 --port 8080 --reload
+
+  integration_hh:
+    build:
+      context: ./integration_hh
+      dockerfile: Dockerfile
+    container_name: integration-hh
+    env_file:
+      - ./integration_hh/.env
+    environment:
+      DB_HOST: ${DB_HOST}
+      DB_PORT: ${DB_PORT}
+      DB_NAME: ${DB_NAME}
+      DB_USERNAME: ${DB_USERNAME}
+      DB_PASSWORD: ${DB_PASSWORD}
+
+      RABBITMQ_HOST: ${RABBITMQ_HOST}
+      RABBITMQ_PORT: ${RABBITMQ_PORT}
+      RABBITMQ_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-guest}
+      RABBITMQ_VHOST: ${RABBITMQ_VHOST:-/}
+      RABBITMQ_QUEUE: ${HH_QUEUE:-reactions_queue}
+
+      X_API_KEY_HH: ${X_API_KEY_HH}
+      ACCESS_TOKEN_REQUEST: ${ACCESS_TOKEN_REQUEST}
+
+      APP_NAME: integration_hh
+      APP_PORT: 9090
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./integration_hh:/integration_hh
+      - ./integration_hh/logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - backend-network
+    command: uvicorn src.main:app --host 0.0.0.0 --port 9090 --reload
+
+  notification:
+    build:
+      context: ./notification
+      dockerfile: Dockerfile
+    container_name: notification
+    env_file:
+      - ./notification/.env
+    environment:
+      API_BASE_URL: http://127.0.0.1:8080
+      TOKEN_NOTIFICATIONS: ${TOKEN_NOTIFICATIONS}
+      NOTIFICATION_HOUR: ${NOTIFICATION_HOUR:-8}
+      NOTIFICATION_MINUTE: ${NOTIFICATION_MINUTE:-0}
+      NOTIFICATION_TIMEZONE: ${NOTIFICATION_TIMEZONE:-Europe/Moscow}
+    depends_on:
+      - manager_crm_app
+    restart: unless-stopped
+    networks:
+      - backend-network
+
+volumes:
+  postgres_data:
+  rabbitmq_data:
+
+networks:
+  backend-network:
+    driver: bridge

@@ -1,0 +1,1 @@
+from .new_vacancy import add_new_vacancy
