@@ -4,7 +4,7 @@ from fastapi import APIRouter
 from api import hh
 
 
-router_hh = APIRouter(prefix="/webhook", tags=["Auth"])
+router_hh = APIRouter(prefix="/webhook", tags=["webhook"])
 
 
 router_hh.add_api_route(
